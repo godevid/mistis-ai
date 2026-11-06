@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#05060a">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src https: http://localhost:* http://127.0.0.1:*; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Mistis AI — Ngobrol dengan Hantu Nusantara</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%91%BB%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="scene" class="scene"></div>
+  <div class="fog f1"></div><div class="fog f2"></div>
+  <div class="vignette"></div>
+  <div id="flash" class="flash"></div>
+
+  <div id="app" class="app" hidden>
+    <header class="top">
+      <div class="brand"><span class="logo">Mistis<b>AI</b></span><small>ngobrol dengan makhluk halus Nusantara</small></div>
+      <div class="scenes" id="sceneBar" role="tablist" aria-label="Pilih latar"></div>
+      <div class="actions">
+        <button id="btnScan" class="icon-btn" title="Pindai hantu di sekitar">📡<span>Pindai</span></button>
+        <button id="btnSound" class="icon-btn" title="Suara angin malam" aria-pressed="false">🔇<span>Suara</span></button>
+        <button id="btnSettings" class="icon-btn" title="Pengaturan LLM & kunci">⚙️<span>LLM</span></button>
+      </div>
+    </header>
+
+    <div class="main">
+      <aside class="ghosts" id="ghostList" aria-label="Pilih hantu"></aside>
+
+      <section class="chat" aria-label="Obrolan">
+        <div class="chat-head">
+          <div class="avatar-lg" id="headAvatar"></div>
+          <div class="who">
+            <h2 id="headName"></h2>
+            <p id="headTitle"></p>
+            <div class="skills" id="headSkills"></div>
+          </div>
+          <button id="btnClear" class="ghost-btn" title="Hapus obrolan dengan hantu ini">🧹 Bersihkan</button>
+        </div>
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <div id="quick" class="quick"></div>
+        <form id="composer" class="composer" autocomplete="off">
+          <textarea id="input" rows="1" placeholder="Bisikkan sesuatu…" aria-label="Pesan"></textarea>
+          <button id="btnSend" type="submit" class="send">Kirim</button>
+        </form>
+        <p class="privacy">🔒 Kunci API dienkripsi &amp; hanya tersimpan di browser ini. Obrolan tidak disimpan ke mana pun.</p>
+      </section>
+    </div>
+  </div>
+
+  <!-- ===================== Scanner (gacha) ===================== -->
+  <div id="scanner" class="scanner" role="dialog" aria-modal="true" aria-label="Pemindai hantu">
+    <div class="scan-box">
+      <div class="scan-title">📡 PEMINDAI MAKHLUK HALUS</div>
+      <div class="radar" id="radar">
+        <div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div>
+        <div class="cross h"></div><div class="cross v"></div>
+        <div class="sweep"></div>
+        <div id="blips"></div>
+        <div class="you"></div>
+      </div>
+      <div class="scan-status" id="scanStatus">Siap memindai area sekitarmu.</div>
+      <div class="scan-meter"><i id="scanBar"></i></div>
+      <ul class="scan-log" id="scanLog"></ul>
+      <div class="scan-reveal" id="scanReveal" hidden>
+        <div class="rarity" id="revRarity"></div>
+        <div class="reveal-av" id="revAvatar"></div>
+        <h3 id="revName"></h3>
+        <p id="revText"></p>
+      </div>
+      <div class="scan-actions">
+        <button id="scanStart" class="primary">Mulai Memindai</button>
+        <button id="scanAccept" class="primary" hidden>Terima &amp; Bicara</button>
+        <button id="scanAgain" class="secondary" hidden>Pindai Lagi</button>
+        <button id="scanSkip" class="link">Lewati</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== Settings ===================== -->
+  <dialog id="settings" class="modal">
+    <form method="dialog" id="settingsForm" class="modal-body" autocomplete="off">
+      <h3>⚙️ Hubungkan LLM-mu</h3>
+      <p class="muted">Bawa endpoint sendiri (kompatibel OpenAI: OpenAI, OpenRouter, Groq, Together, LM Studio, Ollama, vLLM, dll.). Permintaan dikirim langsung dari browsermu ke endpoint tersebut — tanpa server Mistis AI.</p>
+
+      <label>Base URL
+        <input id="cfgBase" type="url" placeholder="https://api.openai.com/v1" spellcheck="false" required>
+      </label>
+      <label>API Key
+        <input id="cfgKey" type="password" placeholder="sk-… (boleh kosong untuk model lokal)" spellcheck="false" autocomplete="off">
+      </label>
+      <label>Model
+        <div class="row">
+          <input id="cfgModel" list="modelList" placeholder="gpt-4o-mini" spellcheck="false" required>
+          <button type="button" id="btnModels" class="secondary">Ambil daftar</button>
+        </div>
+        <datalist id="modelList"></datalist>
+      </label>
+      <label>Temperature: <b id="tempVal">0.9</b>
+        <input id="cfgTemp" type="range" min="0" max="1.5" step="0.1" value="0.9">
+      </label>
+
+      <fieldset>
+        <legend>Perlindungan enkripsi (AES-256-GCM)</legend>
+        <label class="radio"><input type="radio" name="mode" value="passphrase" checked> <span><b>Passphrase</b> — paling aman. Diminta setiap kali buka situs.</span></label>
+        <label class="radio"><input type="radio" name="mode" value="device"> <span><b>Kunci perangkat</b> — otomatis terbuka, kunci tak-dapat-diekspor di IndexedDB browser ini.</span></label>
+        <label class="radio"><input type="radio" name="mode" value="none"> <span><b>Sesi saja</b> — tidak disimpan sama sekali, hilang saat tab ditutup.</span></label>
+        <input id="cfgPass" type="password" placeholder="Passphrase (min. 6 karakter)" autocomplete="new-password">
+      </fieldset>
+
+      <div id="settingsMsg" class="msg" role="status"></div>
+      <div class="modal-actions">
+        <button type="button" id="btnForget" class="danger">Hapus semua data lokal</button>
+        <span class="spacer"></span>
+        <button type="button" id="btnCancel" class="secondary">Tutup</button>
+        <button type="submit" id="btnSave" class="primary">Simpan &amp; Gunakan</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="unlock" class="modal small">
+    <form method="dialog" id="unlockForm" class="modal-body" autocomplete="off">
+      <h3>🔓 Buka brankas</h3>
+      <p class="muted">Masukkan passphrase untuk mendekripsi konfigurasi LLM yang tersimpan di browser ini.</p>
+      <input id="unlockPass" type="password" placeholder="Passphrase" autocomplete="current-password">
+      <div id="unlockMsg" class="msg" role="status"></div>
+      <div class="modal-actions">
+        <button type="button" id="unlockSkip" class="secondary">Nanti</button>
+        <span class="spacer"></span>
+        <button type="submit" class="primary">Buka</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="js/ghosts.js"></script>
+  <script src="js/scenes.js"></script>
+  <script src="js/vault.js"></script>
+  <script src="js/llm.js"></script>
+  <script src="js/sound.js"></script>
+  <script src="js/scanner.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
