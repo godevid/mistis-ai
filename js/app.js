@@ -1,18 +1,43 @@
-/* Mistis AI — main app */
+/* Mistis AI — main app: scanner -> encounter (ghost + location chosen by gacha) -> timed departure -> scanner */
 (function () {
   const $ = (id) => document.getElementById(id);
-  const PREFS_KEY = 'mistis.prefs.v1'; // non-sensitive only (selected scene)
+  const PREFS_KEY = 'mistis.prefs.v1'; // non-sensitive prefs only
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  /** How long a ghost stays (ms). Random in this range. Debug: ?stay=15-30 (seconds). */
+  const STAY = (() => {
+    try {
+      const q = new URLSearchParams(location.search).get('stay');
+      if (q) {
+        const [a, b] = q.split('-').map(Number);
+        if (a > 0) return [a * 1000, (b >= a ? b : a) * 1000];
+      }
+    } catch { /* ignore */ }
+    return [150000, 330000];
+  })();
+
+  const OMENS = [
+    '*Lampu seakan berkedip. Suhu turun drastis — napasmu mengepul.*',
+    '*Angin berhenti seketika. Hening yang tidak wajar menekan telinga.*',
+    '*Bulu kudukmu berdiri. Sosok itu terasa… lebih dekat dari sebelumnya.*',
+    '*Terdengar bisikan tepat di belakang telingamu, lalu lenyap.*',
+    '*Bayangan di sekelilingmu bergerak sendiri, memanjang ke arahmu.*',
+  ];
 
   const state = {
-    ghostId: 'pocong',
+    ghostId: null,
     sceneId: 'graveyard',
     config: null, // { baseUrl, apiKey, model, temperature } — memory only
-    histories: {}, // ghostId -> [{role, content}] — memory; persisted only (encrypted) if the user opts in
+    histories: {}, // ghostId -> messages; persisted only (encrypted) if the user opts in
     abort: null,
     busy: false,
-    saveHistory: false, // pref: persist chat history encrypted on this device
-    historyReady: false, // true once stored history was loaded (or none exists) so we never overwrite unreadable data
+    saveHistory: false,
+    historyReady: false,
     persistTimer: null,
+    soundOn: true,
+    encounter: null,
+    eid: 0,
   };
 
   const ghost = () => window.GHOSTS.find((g) => g.id === state.ghostId);
@@ -21,7 +46,7 @@
 
   /* ---------- helpers ---------- */
   function esc(s) {
-    return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
   function md(text) {
     let t = esc(text);
@@ -40,78 +65,24 @@
     try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; }
   }
   function savePrefs() {
-    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ scene: state.sceneId, saveHistory: state.saveHistory })); } catch {}
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ saveHistory: state.saveHistory, sound: state.soundOn })); } catch { /* ignore */ }
   }
 
   /* ---------- scene ---------- */
   function renderScene() {
     $('scene').innerHTML = window.renderScene(state.sceneId);
-    document.querySelectorAll('#sceneBar button').forEach((b) =>
-      b.setAttribute('aria-selected', String(b.dataset.id === state.sceneId)));
-    window.Sound.setScene(scene().ambience);
-    savePrefs();
-  }
-  function buildSceneBar() {
-    const bar = $('sceneBar');
-    bar.innerHTML = '';
-    window.SCENES.forEach((s) => {
-      const b = document.createElement('button');
-      b.dataset.id = s.id;
-      b.setAttribute('role', 'tab');
-      b.title = s.desc;
-      b.innerHTML = `<span>${s.icon}</span> ${s.name}`;
-      b.addEventListener('click', () => { state.sceneId = s.id; renderScene(); });
-      bar.appendChild(b);
-    });
-  }
-
-  /* ---------- ghosts ---------- */
-  function buildGhostList() {
-    const list = $('ghostList');
-    list.innerHTML = '';
-    window.GHOSTS.forEach((g) => {
-      const b = document.createElement('button');
-      b.className = 'ghost-card';
-      b.dataset.id = g.id;
-      b.style.setProperty('--gc', g.color);
-      b.innerHTML = `<div class="avatar-sm">${g.svg}</div><div><strong>${g.name}</strong><small>${g.title}</small></div>`;
-      b.addEventListener('click', () => selectGhost(g.id));
-      list.appendChild(b);
-    });
-  }
-  function selectGhost(id, opts = {}) {
-    if (state.busy) stopStream();
-    state.ghostId = id;
-    const g = ghost();
-    document.querySelectorAll('.ghost-card').forEach((c) => c.classList.toggle('active', c.dataset.id === id));
-    $('headAvatar').innerHTML = g.svg;
-    $('headAvatar').style.setProperty('--gc', g.color);
-    $('headName').textContent = g.name;
-    $('headTitle').textContent = `${g.title} — “${g.tagline}”`;
-    $('headSkills').innerHTML = g.skills.map((s) => `<span class="chip">${esc(s)}</span>`).join('');
-    $('quick').innerHTML = '';
-    g.quick.forEach((q) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = q;
-      b.addEventListener('click', () => { $('input').value = q; send(); });
-      $('quick').appendChild(b);
-    });
-    if (!hist().length) hist().push({ role: 'assistant', content: opts.greeting || g.greeting, local: true });
-    renderMessages();
-    if (!opts.silent) $('input').focus();
   }
 
   /* ---------- messages ---------- */
   function msgEl(m) {
+    if (m.role === 'narrator') {
+      const n = document.createElement('div');
+      n.className = 'narr' + (m.alarm ? ' alarm' : '');
+      n.innerHTML = esc(m.content.replace(/^\*+|\*+$/g, '')).replace(/\n/g, '<br>');
+      return n;
+    }
     const d = document.createElement('div');
     d.className = 'msg ' + (m.role === 'user' ? 'me' : 'bot') + (m.error ? ' err' : '');
-    if (m.role !== 'user') {
-      const a = document.createElement('div');
-      a.className = 'bubble-av';
-      a.innerHTML = ghost().svg;
-      d.appendChild(a);
-    }
     const b = document.createElement('div');
     b.className = 'bubble';
     b.innerHTML = md(m.content || '');
@@ -119,6 +90,7 @@
     return d;
   }
   function renderMessages() {
+    if (!state.ghostId) return;
     const box = $('messages');
     box.innerHTML = '';
     hist().forEach((m) => box.appendChild(msgEl(m)));
@@ -136,20 +108,31 @@
     }
     box.scrollTop = box.scrollHeight;
   }
+  function pushNarr(text, alarm) {
+    const m = { role: 'narrator', content: text, local: true, alarm: !!alarm };
+    hist().push(m);
+    const box = $('messages');
+    box.querySelectorAll('.notice').forEach((n) => n.remove());
+    box.appendChild(msgEl(m));
+    box.scrollTop = box.scrollHeight;
+    schedulePersist();
+  }
 
+  function systemPrompt() {
+    const g = ghost(), sc = scene();
+    return `${g.system}\n\nLOKASI PERTEMUAN MALAM INI: ${sc.name} — ${sc.desc} Sebut/rujuk suasana lokasi ini secara alami sesekali. Waktumu bersama pengguna terbatas dan bisa berakhir mendadak.`;
+  }
   function buildMessages() {
-    const g = ghost();
-    const sc = scene();
-    const sys = `${g.system}\n\nLATAR TEMPAT SAAT INI: ${sc.name} — ${sc.desc} Sebut/rujuk suasana ini secara alami sesekali.`;
-    const turns = hist().filter((m) => !m.error).slice(-24).map(({ role, content }) => ({ role, content }));
-    return [{ role: 'system', content: sys }, ...turns];
+    const turns = hist()
+      .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content && !m.error)
+      .slice(-24)
+      .map(({ role, content }) => ({ role, content }));
+    return [{ role: 'system', content: systemPrompt() }, ...turns];
   }
 
   function setBusy(b) {
     state.busy = b;
     $('btnSend').textContent = b ? 'Stop' : 'Kirim';
-    $('headAvatar').classList.toggle('talking', b);
-    $('input').disabled = false;
   }
   function stopStream() {
     if (state.abort) state.abort.abort();
@@ -157,6 +140,7 @@
 
   async function send() {
     if (state.busy) return stopStream();
+    if (!state.encounter || state.encounter.departing) return;
     const text = $('input').value.trim();
     if (!text) return;
     if (!state.config) { openSettings('Hubungkan LLM dulu agar hantunya bisa membalas.'); return; }
@@ -178,9 +162,11 @@
 
     state.abort = new AbortController();
     setBusy(true);
-    const msgs = buildMessages().slice(0, -1); // drop empty bot placeholder
+    let first = true;
+    const msgs = buildMessages();
     try {
       await window.LLM.stream(state.config, msgs, (d) => {
+        if (first) { first = false; window.Atmos.react(); window.Sound.accent(state.ghostId); }
         botMsg.content += d;
         bubble.classList.remove('typing');
         bubble.innerHTML = md(botMsg.content);
@@ -212,6 +198,197 @@
     const t = $('input');
     t.style.height = 'auto';
     t.style.height = Math.min(t.scrollHeight, 140) + 'px';
+  }
+
+  /* ---------- encounter lifecycle ---------- */
+  function approachLine(g, sc, rarity, returning) {
+    return returning
+      ? `*${g.name} muncul lagi di ${sc.name}…*`
+      : `*[${rarity.label}] Sinyal gaib terkunci di ${sc.name}. ${g.name} menghampirimu…*`;
+  }
+
+  function beginEncounter(g, sceneId, rarity) {
+    clearEncounterTimers();
+    state.ghostId = g.id;
+    state.sceneId = sceneId;
+    const sc = scene();
+    const id = ++state.eid;
+
+    renderScene();
+    window.Atmos.showGhost(g);
+    window.Sound.start(sceneId, g.id);
+    window.Sound.arrive(g.id);
+    $('status').innerHTML = `📍 ${esc(sc.name)} · <b>${esc(g.name)}</b>`;
+    $('quick').innerHTML = '';
+    g.quick.forEach((q) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = q;
+      b.addEventListener('click', () => { $('input').value = q; send(); });
+      $('quick').appendChild(b);
+    });
+
+    const h = (state.histories[g.id] ||= []);
+    const returning = h.some((m) => m.role === 'user');
+    if (!returning) h.length = 0;
+    h.push({ role: 'narrator', content: approachLine(g, sc, rarity, returning), local: true, approach: true });
+
+    $('app').hidden = false;
+    $('input').disabled = false;
+    $('btnSend').disabled = false;
+    $('btnLeave').disabled = false;
+    renderMessages();
+    updatePrivacy();
+
+    const duration = rand(STAY[0], STAY[1]);
+    const enc = { id, start: Date.now(), duration, departing: false, timers: [], tick: null };
+    state.encounter = enc;
+
+    if (!returning) {
+      enc.timers.push(setTimeout(() => {
+        if (state.encounter !== enc || enc.departing) return;
+        hist().push({ role: 'assistant', content: g.greeting, local: true, approach: true });
+        renderMessages();
+        window.Atmos.react();
+        window.Sound.accent(g.id);
+        schedulePersist();
+      }, 3000));
+    }
+
+    enc.tick = setInterval(() => {
+      if (state.encounter !== enc) return;
+      window.Atmos.setProximity(0.2 + 0.8 * Math.min(1, (Date.now() - enc.start) / enc.duration));
+    }, 1500);
+
+    // omens, then departure
+    const omenAt = Math.max(duration * 0.55, duration - 30000);
+    enc.timers.push(setTimeout(() => omen(enc), omenAt));
+    if (duration > 60000) enc.timers.push(setTimeout(() => omen(enc, true), duration - 9000));
+    enc.timers.push(setTimeout(() => depart(), duration));
+    // occasional lightning-like flash
+    const lightning = () => {
+      if (state.encounter !== enc || enc.departing) return;
+      window.Atmos.flash(110);
+      enc.timers.push(setTimeout(() => window.Atmos.flash(80), 210));
+      enc.timers.push(setTimeout(lightning, rand(30000, 70000)));
+    };
+    enc.timers.push(setTimeout(lightning, rand(20000, 40000)));
+
+    schedulePersist();
+  }
+
+  function clearEncounterTimers() {
+    const e = state.encounter;
+    if (!e) return;
+    e.timers.forEach(clearTimeout);
+    clearInterval(e.tick);
+  }
+
+  function omen(enc, light) {
+    if (state.encounter !== enc || enc.departing) return;
+    pushNarr(OMENS[Math.floor(Math.random() * OMENS.length)], true);
+    window.Atmos.flicker(light ? 1200 : 2200);
+    window.Atmos.glitch(light ? 200 : 320);
+    window.Sound.omen();
+  }
+
+  async function typeInto(el, text) {
+    el.classList.remove('typing');
+    for (let i = 1; i <= text.length; i += 2) {
+      el.innerHTML = md(text.slice(0, i));
+      $('messages').scrollTop = $('messages').scrollHeight;
+      await sleep(26);
+    }
+    el.innerHTML = md(text);
+  }
+
+  async function speakGoodbye(g, f) {
+    const botMsg = { role: 'assistant', content: '', farewell: true };
+    hist().push(botMsg);
+    const box = $('messages');
+    const el = msgEl(botMsg);
+    box.appendChild(el);
+    const bubble = el.querySelector('.bubble');
+    bubble.classList.add('typing');
+    bubble.innerHTML = '<span class="dots"><i></i><i></i><i></i></span>';
+    box.scrollTop = box.scrollHeight;
+    window.Atmos.react();
+    let got = '';
+    if (state.config) {
+      const ac = new AbortController();
+      const to = setTimeout(() => ac.abort(), 11000);
+      try {
+        const msgs = buildMessages();
+        msgs.push({ role: 'user', content: `[KEJADIAN DI SEKITARMU — jangan sebut kata "kejadian"] ${f.llm} Ucapkan perpisahan singkat (maksimal 2 kalimat, tetap dalam karakter, jangan menjelaskan aturan), lalu kamu pergi.` });
+        await window.LLM.stream(state.config, msgs, (d) => {
+          got += d;
+          bubble.classList.remove('typing');
+          bubble.innerHTML = md(got);
+          box.scrollTop = box.scrollHeight;
+        }, ac.signal);
+      } catch { /* fall back to scripted line */ }
+      clearTimeout(to);
+    }
+    if (!got.trim()) {
+      got = f.goodbye;
+      await typeInto(bubble, got);
+    }
+    botMsg.content = got;
+    bubble.classList.remove('typing');
+    bubble.innerHTML = md(got);
+    window.Sound.accent(g.id);
+    schedulePersist();
+  }
+
+  /** The ghost flees / vanishes (scripted scenario) and we return to the scanner menu. */
+  async function depart(opts = {}) {
+    const enc = state.encounter;
+    if (!enc || enc.departing) return;
+    if (!opts.quick && (state.busy || document.querySelector('dialog[open]'))) {
+      enc.timers.push(setTimeout(() => depart(opts), 4000)); // wait: don't cut a reply or a dialog
+      return;
+    }
+    enc.departing = true;
+    enc.timers.forEach(clearTimeout);
+    clearInterval(enc.tick);
+    if (state.busy) stopStream();
+    $('input').disabled = true;
+    $('btnSend').disabled = true;
+    $('btnLeave').disabled = true;
+
+    const g = ghost(), f = g.farewell, sc = scene();
+    try {
+      if (!opts.quick) {
+        pushNarr(f.scenario, true);
+        window.Sound.omen();
+        window.Sound.cue(g.id);
+        window.Atmos.flicker(2800);
+        window.Atmos.glitch(500);
+        await sleep(3400);
+        await speakGoodbye(g, f);
+        await sleep(1400);
+        pushNarr(f.gone);
+        window.Sound.leave(g.id);
+        window.Atmos.vanish();
+        await sleep(5200);
+      } else {
+        pushNarr('*Kamu memutus pertemuan. Sosok itu menoleh sekali lagi, lalu lenyap tanpa suara…*');
+        window.Sound.leave(g.id);
+        window.Atmos.vanish();
+        await sleep(3400);
+      }
+      window.Atmos.blackout(true);
+      window.Sound.stop(2);
+      await sleep(1600);
+    } finally {
+      state.encounter = null;
+      $('app').hidden = true;
+      window.Atmos.clear();
+      $('scene').innerHTML = '';
+      window.Scanner.open({ message: `${g.name} menghilang dari ${sc.name}. Pindai lagi untuk memanggil makhluk lain.` });
+      setTimeout(() => window.Atmos.blackout(false), 80);
+      schedulePersist();
+    }
   }
 
   /* ---------- settings / vault ---------- */
@@ -310,7 +487,7 @@
   }
 
   async function tryUnlock() {
-    if (!window.Vault.exists() || window.Vault.hasKey()) return; // nothing stored, or already unlocked this session
+    if (!window.Vault.exists() || window.Vault.hasKey()) return; // nothing stored, or already unlocked
     if (window.Vault.mode() === 'device') {
       try { state.config = await window.Vault.load(); await loadHistory(); renderMessages(); } catch { /* ignore */ }
       return;
@@ -325,12 +502,24 @@
     try {
       state.config = await window.Vault.load($('unlockPass').value);
       $('unlockPass').value = '';
-      $('unlock').close();
       await loadHistory();
+      $('unlock').close();
       renderMessages();
     } catch (err) {
       msg($('unlockMsg'), err.message, 'bad');
     }
+  }
+  /** First thing on page load: unlock the vault (if any) before the scanner appears. */
+  function unlockFlow() {
+    return new Promise((resolve) => {
+      if (!window.Vault.exists() || window.Vault.hasKey()) return resolve();
+      if (window.Vault.mode() === 'device') {
+        window.Vault.load().then((c) => { state.config = c; return loadHistory(); }).catch(() => {}).finally(resolve);
+        return;
+      }
+      $('unlock').addEventListener('close', () => resolve(), { once: true });
+      tryUnlock();
+    });
   }
 
   /* ---------- encrypted local history ---------- */
@@ -342,16 +531,17 @@
   function serializeHistory() {
     const ghosts = {};
     for (const [id, list] of Object.entries(state.histories)) {
-      const clean = list.filter((m) => m.content).slice(-200).map(({ role, content, error, local, approach }) => {
+      const clean = list.filter((m) => m.content).slice(-200).map(({ role, content, error, local, approach, alarm }) => {
         const o = { role, content };
         if (error) o.error = true;
         if (local) o.local = true;
         if (approach) o.approach = true;
+        if (alarm) o.alarm = true;
         return o;
       });
       if (clean.length) ghosts[id] = clean;
     }
-    return { v: 1, savedAt: Date.now(), ghosts };
+    return { v: 2, savedAt: Date.now(), ghosts };
   }
   async function persistNow() {
     if (!state.saveHistory || !state.historyReady || !window.Vault.hasKey()) return;
@@ -369,78 +559,45 @@
       for (const [id, msgs] of Object.entries((data && data.ghosts) || {})) {
         if (!window.GHOSTS.some((g) => g.id === id) || !Array.isArray(msgs)) continue;
         const cur = state.histories[id] || [];
-        // keep anything produced this session (user turns or fresh approach lines)
         const fresh = cur.filter((m) => m.role === 'user' || m.approach);
         state.histories[id] = [...msgs, ...fresh];
       }
       state.historyReady = true;
-      selectGhost(state.ghostId, { silent: true });
-    } catch (e) {
+    } catch {
       state.historyReady = false;
     }
   }
 
-  /* ---------- atmosphere ---------- */
-  function lightning() {
-    const f = $('flash');
-    f.classList.add('on');
-    setTimeout(() => f.classList.remove('on'), 120);
-    setTimeout(() => { f.classList.add('on'); setTimeout(() => f.classList.remove('on'), 90); }, 220);
-    setTimeout(lightning, 25000 + Math.random() * 45000);
-  }
-
   /* ---------- boot ---------- */
-  function revealApp() {
-    $('app').hidden = false;
-    document.body.classList.add('ready');
-    tryUnlock();
-  }
-
-  function approachGreeting(g, rarity) {
-    return `*[${rarity.label}] Sinyal gaib terkunci. ${g.name} menghampirimu…*\n\n${g.greeting}`;
-  }
-
-  function startScan() {
+  function startScan(message) {
     window.Scanner.open({
-      onAccept(g, rarity) {
-        state.sceneId = g.favScene;
-        renderScene();
-        // encounter: a never-chatted ghost starts fresh; an existing conversation just gets a new approach line
-        const h = (state.histories[g.id] ||= []);
-        if (!h.some((m) => m.role === 'user')) h.length = 0;
-        h.push({ role: 'assistant', content: approachGreeting(g, rarity), local: true, approach: true });
-        selectGhost(g.id, { silent: true });
-        schedulePersist();
-        revealApp();
-      },
-      onClose() {
-        selectGhost(state.ghostId, { silent: true });
-        revealApp();
-      },
+      message,
+      onAccept(g, rarity, sceneId) { beginEncounter(g, sceneId, rarity); },
+      onSettings() { openSettings(); },
     });
   }
 
-  function init() {
+  function syncSoundBtn() {
+    const b = $('btnSound');
+    b.firstElementChild.textContent = state.soundOn ? '🔊' : '🔇';
+    b.setAttribute('aria-pressed', String(state.soundOn));
+  }
+
+  async function init() {
     const prefs = loadPrefs();
-    if (prefs.scene && window.SCENES.some((s) => s.id === prefs.scene)) state.sceneId = prefs.scene;
     state.saveHistory = !!prefs.saveHistory && window.Vault.exists();
+    state.soundOn = prefs.sound !== false;
+    window.Sound.setEnabled(state.soundOn);
+    syncSoundBtn();
     updatePrivacy();
-    buildSceneBar();
-    buildGhostList();
-    renderScene();
-    selectGhost(state.ghostId, { silent: true });
+    window.Atmos.init();
 
     $('composer').addEventListener('submit', (e) => { e.preventDefault(); send(); });
     $('input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     });
     $('input').addEventListener('input', autoGrow);
-    $('btnClear').addEventListener('click', () => {
-      if (state.busy) stopStream();
-      state.histories[state.ghostId] = [];
-      selectGhost(state.ghostId, { silent: true });
-      schedulePersist();
-    });
+    $('btnLeave').addEventListener('click', () => depart({ quick: true }));
     $('btnSettings').addEventListener('click', () => openSettings());
     $('btnCancel').addEventListener('click', () => $('settings').close());
     $('settingsForm').addEventListener('submit', saveSettings);
@@ -456,20 +613,15 @@
     document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', syncPassVisibility));
     $('unlockForm').addEventListener('submit', submitUnlock);
     $('unlockSkip').addEventListener('click', () => $('unlock').close());
-    $('btnScan').addEventListener('click', startScan);
     $('btnSound').addEventListener('click', async () => {
-      const btn = $('btnSound');
-      if (window.Sound.on) {
-        window.Sound.disable();
-        btn.firstChild.textContent = '🔇'; btn.setAttribute('aria-pressed', 'false');
-      } else if (await window.Sound.enable(scene().ambience)) {
-        btn.firstChild.textContent = '🔊'; btn.setAttribute('aria-pressed', 'true');
-      }
+      state.soundOn = !state.soundOn;
+      if (state.soundOn) await window.Sound.unlock();
+      window.Sound.setEnabled(state.soundOn);
+      syncSoundBtn();
+      savePrefs();
     });
 
-    setTimeout(lightning, 15000 + Math.random() * 20000);
-
-    // First open: ghost scanner gacha intro.
+    await unlockFlow();
     startScan();
   }
 
