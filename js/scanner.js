@@ -21,7 +21,11 @@
     if (weight >= 12) return { key: 'epic', label: 'EPIK', stars: '★★★' };
     return { key: 'legend', label: 'LEGENDARIS', stars: '★★★★' };
   }
+  // Debug helpers: ?force=pocong&scene=graveyard pins the gacha result (useful for demos/tests).
+  const qp = (() => { try { return new URLSearchParams(location.search); } catch { return new URLSearchParams(); } })();
   function weightedPick() {
+    const forced = POOL.find((p) => p.id === qp.get('force'));
+    if (forced) return forced;
     const total = POOL.reduce((a, b) => a + b.weight, 0);
     let r = Math.random() * total;
     for (const p of POOL) {
@@ -43,7 +47,7 @@
 
   let runId = 0;
   let current = null;
-  let handlers = { onAccept: () => {}, onClose: () => {} };
+  let handlers = { onAccept: () => {}, onSettings: () => {} };
 
   const sleep = (ms, id) => new Promise((res) => setTimeout(() => res(id === runId), ms));
 
@@ -58,7 +62,6 @@
     $('scanStart').hidden = false;
     $('scanAccept').hidden = true;
     $('scanAgain').hidden = true;
-    $('scanSkip').hidden = false;
   }
 
   function addLog(text) {
@@ -90,6 +93,7 @@
     resetUI();
     $('scanStart').hidden = true;
     $('scanner').classList.add('scanning');
+    await window.Sound.unlock(); // user gesture: start audio engine
     window.Sound.blip(660, 0.1, 0.05);
 
     // ---- Phase 1: scanning ----
@@ -113,7 +117,10 @@
     // ---- Phase 2: pick + approach ----
     const pick = weightedPick();
     const ghost = window.GHOSTS.find((g) => g.id === pick.id);
-    current = { ghost, rarity: rarityOf(pick.weight) };
+    const wantScene = qp.get('scene');
+    const sceneId = window.SCENES.some((x) => x.id === wantScene) ? wantScene : ghost.scenes[Math.floor(Math.random() * ghost.scenes.length)];
+    const sceneName = (window.SCENES.find((x) => x.id === sceneId) || {}).name || '';
+    current = { ghost, rarity: rarityOf(pick.weight), sceneId };
 
     $('scanStatus').textContent = 'Satu sinyal bergerak ke arahmu…';
     decoys.forEach((b) => b.classList.add('fade'));
@@ -153,13 +160,16 @@
     $('revAvatar').innerHTML = ghost.svg;
     $('revAvatar').classList.add('silhouette');
     $('revName').textContent = '???';
+    $('revLoc').textContent = '';
+    window.Sound.reveal(ghost.id);
     $('revText').textContent = 'Sosok itu berdiri tepat di depanmu…';
     rev.hidden = false;
 
     if (!(await sleep(1400, id))) return;
     $('revAvatar').classList.remove('silhouette');
     $('revName').textContent = ghost.name;
-    $('revText').textContent = `${ghost.name} — ${ghost.title}. Ia mendekat dan ingin bicara denganmu lewat aplikasi ini.`;
+    $('revLoc').textContent = '📍 ' + sceneName;
+    $('revText').textContent = `${ghost.title}. Ia muncul di ${sceneName} dan ingin bicara denganmu… tapi tidak akan lama.`;
     $('scanStatus').textContent = `${ghost.name} menghampirimu!`;
     $('scanBar').style.width = '100%';
     window.Sound.blip(196, 0.5, 0.07, 'triangle');
@@ -172,6 +182,7 @@
     open(h) {
       handlers = Object.assign(handlers, h || {});
       resetUI();
+      if (h && h.message) $('scanStatus').textContent = h.message;
       $('scanner').classList.add('open');
     },
     close() {
@@ -186,12 +197,9 @@
     $('scanAccept').addEventListener('click', () => {
       const c = current;
       Scanner.close();
-      if (c) handlers.onAccept(c.ghost, c.rarity);
+      if (c) handlers.onAccept(c.ghost, c.rarity, c.sceneId);
     });
-    $('scanSkip').addEventListener('click', () => {
-      Scanner.close();
-      handlers.onClose();
-    });
+    $('scanSettings').addEventListener('click', () => handlers.onSettings());
   });
 
   window.Scanner = Scanner;

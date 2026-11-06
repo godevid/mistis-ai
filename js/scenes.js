@@ -16,24 +16,35 @@
       const x = rnd() * W, y = rnd() * H * 0.5, s = rnd() * 1.6 + 0.4;
       stars += `<circle class="star" style="animation-delay:${r2(rnd() * 5)}s" cx="${r2(x)}" cy="${r2(y)}" r="${r2(s)}" fill="#fff"/>`;
     }
-    const m = moon || { x: 1250, y: 150, r: 60, c: '#f3efd8' };
+    const m0 = moon || { x: 1250, y: 150, r: 60, c: '#f3efd8' };
+    const m = Object.assign({}, m0, { x: m0.x > 900 ? m0.x - 600 : m0.x });
     return `
     <defs>
       <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="${top}"/><stop offset=".6" stop-color="${mid}"/><stop offset="1" stop-color="${bottom}"/>
       </linearGradient>
-      <radialGradient id="moonGlow"><stop offset="0" stop-color="${m.c}" stop-opacity=".55"/><stop offset="1" stop-color="${m.c}" stop-opacity="0"/></radialGradient>
+      <radialGradient id="moonGlow"><stop offset="0" stop-color="${m.c}" stop-opacity=".5"/><stop offset=".25" stop-color="${m.c}" stop-opacity=".16"/><stop offset="1" stop-color="${m.c}" stop-opacity="0"/></radialGradient>
+      <radialGradient id="limb" cx=".42" cy=".4" r=".62"><stop offset=".6" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".42"/></radialGradient>
+      <linearGradient id="horizon" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6d7f99" stop-opacity="0"/><stop offset=".7" stop-color="#7f90aa" stop-opacity=".4"/><stop offset="1" stop-color="#4a5468" stop-opacity=".5"/></linearGradient>
+      <filter id="moonTex" x="-5%" y="-5%" width="110%" height="110%" color-interpolation-filters="sRGB">
+        <feTurbulence type="fractalNoise" baseFrequency=".02" numOctaves="5" seed="8" result="n"/>
+        <feDiffuseLighting in="n" surfaceScale="7" diffuseConstant="1.15" lighting-color="#ffffff" result="l"><feDistantLight azimuth="300" elevation="46"/></feDiffuseLighting>
+        <feComposite in="l" in2="SourceAlpha" operator="in" result="t"/>
+        <feBlend in="t" in2="SourceGraphic" mode="multiply"/>
+      </filter>
+      <filter id="blur6" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="6"/></filter>
+      <filter id="soft" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation="2.4"/></filter>
+      <filter id="roughV" x="-8%" y="-8%" width="116%" height="116%"><feTurbulence type="fractalNoise" baseFrequency=".035" numOctaves="3" seed="2" result="t"/><feDisplacementMap in="SourceGraphic" in2="t" scale="10" xChannelSelector="R" yChannelSelector="G"/></filter>
+      <filter id="roughS" x="-5%" y="-5%" width="110%" height="110%"><feTurbulence type="fractalNoise" baseFrequency=".05" numOctaves="3" seed="6" result="t"/><feDisplacementMap in="SourceGraphic" in2="t" scale="5" xChannelSelector="R" yChannelSelector="G"/></filter>
     </defs>
     <rect width="${W}" height="${H}" fill="url(#sky)"/>
     ${stars}
-    <circle cx="${m.x}" cy="${m.y}" r="${m.r * 4}" fill="url(#moonGlow)"/>
-    <circle cx="${m.x}" cy="${m.y}" r="${m.r}" fill="${m.c}"/>
-    <circle cx="${m.x - 18}" cy="${m.y - 10}" r="${m.r * 0.18}" fill="#000" opacity=".12"/>
-    <circle cx="${m.x + 20}" cy="${m.y + 16}" r="${m.r * 0.12}" fill="#000" opacity=".12"/>
-    <g class="clouds" opacity=".35" fill="#0a0d16">
-      <ellipse cx="300" cy="140" rx="260" ry="26"/><ellipse cx="700" cy="220" rx="320" ry="22"/>
-      <ellipse cx="1100" cy="90" rx="280" ry="20"/><ellipse cx="1450" cy="250" rx="240" ry="18"/>
-    </g>`;
+    <circle cx="${m.x}" cy="${m.y}" r="${m.r * 5}" fill="url(#moonGlow)"/>
+    <g filter="url(#moonTex)"><circle cx="${m.x}" cy="${m.y}" r="${m.r}" fill="${m.c}"/></g>
+    <ellipse cx="${m.x - m.r * 0.25}" cy="${m.y - m.r * 0.2}" rx="${m.r * 0.38}" ry="${m.r * 0.3}" fill="#6b6a5c" opacity=".22" filter="url(#blur6)"/>
+    <ellipse cx="${m.x + m.r * 0.3}" cy="${m.y + m.r * 0.28}" rx="${m.r * 0.3}" ry="${m.r * 0.22}" fill="#6b6a5c" opacity=".18" filter="url(#blur6)"/>
+    <circle cx="${m.x}" cy="${m.y}" r="${m.r}" fill="url(#limb)"/>
+    <rect y="${H * 0.52}" width="${W}" height="${H * 0.28}" fill="url(#horizon)"/>`;
   }
 
   function tree(x, base, h, w, color, rnd, dead = true) {
@@ -87,13 +98,14 @@
     for (let i = 0; i < 6; i++) near += tree(40 + i * 290 + rnd() * 120, 940, 760 + rnd() * 200, 36 + rnd() * 22, '#030507', rnd, true);
     return `
       ${sky('#02040a', '#070d18', '#0e1a22', { x: 1180, y: 160, r: 54, c: '#e9ecd6' })}
-      <g>${far}</g>
+      <g filter="url(#soft)" opacity=".92">${far}</g>
       <rect y="690" width="${W}" height="220" fill="#06090d"/>
-      <g>${mid}</g>
+      <rect y="560" width="${W}" height="180" fill="#8aa0b8" opacity=".06"/>
+      <g filter="url(#roughV)">${mid}</g>
       ${eyes(rnd, 9, { x0: 60, x1: 1500, y0: 560, y1: 760 })}
       ${fireflies(rnd, 26, { x0: 0, x1: W, y0: 420, y1: 800 })}
       <path d="M0 800 Q400 760 800 800 T1600 790 L1600 900 L0 900 Z" fill="#030507"/>
-      <g>${near}</g>`;
+      <g filter="url(#roughV)">${near}</g>`;
   }
 
   /* ---------------- Abandoned building ---------------- */
@@ -214,7 +226,7 @@
         ${Array.from({ length: 22 }, (_, i) => `<path class="root" style="animation-delay:${r2(rnd() * 4)}s" d="M${700 + i * 20} 320 q${r2((rnd() - 0.5) * 20)} 120 ${r2((rnd() - 0.5) * 12)} ${r2(160 + rnd() * 200)}" stroke="#050607" stroke-width="3" fill="none"/>`).join('')}
       </g>
       ${ghostShape}
-      <g>${stones}</g>
+      <g filter="url(#roughS)">${stones}</g>
       <g class="candles">
         ${[300, 620, 1010, 1240].map((x, i) => `<g transform="translate(${x} ${790 + (i % 2) * 40})"><rect x="-3" y="-14" width="6" height="14" fill="#e8dcc0"/><ellipse class="flame" cx="0" cy="-20" rx="3" ry="6" fill="#ffb347"/><circle cx="0" cy="-20" r="26" fill="#ffb347" opacity=".08"/></g>`).join('')}
       </g>
