@@ -71,8 +71,9 @@ input, textarea { font: inherit; color: inherit; }
 .logo b { color: var(--blood-2); margin-left: 6px; }
 .brand small { color: var(--muted); font-size: 11px; margin-top: 4px; letter-spacing: .5px; }
 @keyframes logoFlicker { 0%,19%,21%,60%,62%,100% { opacity: 1; } 20%,61% { opacity: .55; } }
-.scenes { display: flex; gap: 6px; flex: 1; flex-wrap: wrap; justify-content: center; }
-.scenes button { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: 999px; padding: 6px 12px; font-size: 13px; color: var(--muted); transition: .2s; }
+.scenes { display: flex; gap: 6px; order: 3; flex: 1 1 100%; flex-wrap: wrap; justify-content: center; }
+.brand { margin-right: auto; }
+.scenes button { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; color: var(--muted); transition: .2s; }
 .scenes button:hover { color: var(--bone); border-color: var(--line); }
 .scenes button[aria-selected=true] { color: #fff; background: linear-gradient(180deg, rgba(179,18,42,.5), rgba(179,18,42,.2)); border-color: var(--blood); box-shadow: 0 0 14px rgba(179,18,42,.45); }
 .actions { display: flex; gap: 6px; }
@@ -251,7 +252,7 @@ input, textarea { font: inherit; color: inherit; }
   .ghosts { flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
   .ghost-card { flex: none; min-width: 170px; }
   .brand small, .icon-btn span { display: none; }
-  .scenes { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; order: 3; width: 100%; flex-basis: 100%; scrollbar-width: none; }
+  .scenes { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .scenes button { flex: none; }
   .avatar-lg { width: 62px; height: 70px; }
   .who h2 { font-size: 20px; } .who p { display: none; }
@@ -260,3 +261,18 @@ input, textarea { font: inherit; color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
+
+/* extra avatar helpers */
+.av .floatc { animation: floaty 2.8s ease-in-out infinite; }
+
+.flag { transform-box: fill-box; transform-origin: left center; animation: flagw 3.4s ease-in-out infinite alternate; }
+@keyframes flagw { from { transform: skewY(-3deg) scaleX(1); } to { transform: skewY(3deg) scaleX(.94); } }
+.swing { transform-box: fill-box; transform-origin: 50% 0; animation: swingr 3.6s ease-in-out infinite alternate; }
+@keyframes swingr { from { transform: rotate(-9deg); } to { transform: rotate(9deg); } }
+
+.modal label.radio.check input { margin-top: 3px; }
+.modal fieldset .row { justify-content: flex-start; }
+.modal .danger { font-size: 12.5px; }
+.notice button + button { margin-left: 6px; }
+
+.reflect { filter: blur(8px); }

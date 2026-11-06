@@ -7,9 +7,12 @@
     ghostId: 'pocong',
     sceneId: 'graveyard',
     config: null, // { baseUrl, apiKey, model, temperature } — memory only
-    histories: {}, // ghostId -> [{role, content}] — memory only, never persisted
+    histories: {}, // ghostId -> [{role, content}] — memory; persisted only (encrypted) if the user opts in
     abort: null,
     busy: false,
+    saveHistory: false, // pref: persist chat history encrypted on this device
+    historyReady: false, // true once stored history was loaded (or none exists) so we never overwrite unreadable data
+    persistTimer: null,
   };
 
   const ghost = () => window.GHOSTS.find((g) => g.id === state.ghostId);
@@ -37,7 +40,7 @@
     try { return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; } catch { return {}; }
   }
   function savePrefs() {
-    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ scene: state.sceneId })); } catch {}
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ scene: state.sceneId, saveHistory: state.saveHistory })); } catch {}
   }
 
   /* ---------- scene ---------- */
@@ -119,12 +122,17 @@
     const box = $('messages');
     box.innerHTML = '';
     hist().forEach((m) => box.appendChild(msgEl(m)));
-    if (!state.config) {
+    const locked = window.Vault.exists() && !window.Vault.hasKey();
+    if (!state.config || locked) {
       const n = document.createElement('div');
       n.className = 'notice';
-      n.innerHTML = 'Belum ada LLM terhubung. <button type="button" id="noticeBtn">Hubungkan sekarang</button>';
+      if (locked) {
+        n.innerHTML = 'Brankas terkunci' + (state.saveHistory ? ' — riwayat tersimpan belum dimuat' : '') + '. <button type="button" data-a="unlock">Buka brankas</button>';
+      } else {
+        n.innerHTML = 'Belum ada LLM terhubung. <button type="button" data-a="cfg">Hubungkan sekarang</button>';
+      }
       box.appendChild(n);
-      n.querySelector('button').addEventListener('click', openSettings);
+      n.querySelector('button').addEventListener('click', (e) => (e.target.dataset.a === 'unlock' ? tryUnlock() : openSettings()));
     }
     box.scrollTop = box.scrollHeight;
   }
@@ -196,6 +204,7 @@
       bubble.innerHTML = md(botMsg.content);
       botEl.classList.toggle('err', !!botMsg.error);
       $('messages').scrollTop = $('messages').scrollHeight;
+      schedulePersist();
     }
   }
 
@@ -220,6 +229,7 @@
     $('cfgPass').value = '';
     const m = window.Vault.mode() || 'passphrase';
     document.querySelectorAll('input[name=mode]').forEach((r) => (r.checked = r.value === m));
+    $('cfgHistory').checked = state.saveHistory;
     syncPassVisibility();
     msg($('settingsMsg'), typeof note === 'string' ? note : '', 'info');
     if (!$('settings').open) $('settings').showModal();
@@ -227,6 +237,8 @@
   function syncPassVisibility() {
     const m = document.querySelector('input[name=mode]:checked').value;
     $('cfgPass').hidden = m !== 'passphrase';
+    $('cfgHistory').disabled = m === 'none';
+    if (m === 'none') $('cfgHistory').checked = false;
   }
 
   async function saveSettings(e) {
@@ -240,11 +252,27 @@
     if (!/^https?:\/\//i.test(cfg.baseUrl)) return msg($('settingsMsg'), 'Base URL harus diawali http:// atau https://', 'bad');
     if (!cfg.model) return msg($('settingsMsg'), 'Isi nama model.', 'bad');
     const mode = document.querySelector('input[name=mode]:checked').value;
+    const wantHistory = mode !== 'none' && $('cfgHistory').checked;
+    // Saved history exists but could not be decrypted this session: changing keys would orphan it.
+    const orphan = window.Vault.hasBlob('history') && !state.historyReady;
+    if (orphan && !confirm('Riwayat terenkripsi yang tersimpan belum dibuka di sesi ini. Menyimpan pengaturan akan menghapusnya permanen. Lanjutkan?')) return;
+    if (mode === 'none' && window.Vault.hasBlob('history') && !orphan &&
+        !confirm('Mode "Sesi saja" juga menghapus riwayat obrolan tersimpan. Lanjutkan?')) return;
     try {
       if (mode === 'none') {
         await window.Vault.wipe();
       } else {
         await window.Vault.save(cfg, mode, $('cfgPass').value);
+      }
+      if (orphan) window.Vault.removeBlob('history');
+      state.saveHistory = wantHistory;
+      savePrefs();
+      if (wantHistory) {
+        state.historyReady = true;
+        await persistNow(); // re-encrypt in-memory history with the (possibly new) key
+      } else {
+        window.Vault.removeBlob('history');
+        state.historyReady = false;
       }
     } catch (err) {
       return msg($('settingsMsg'), err.message, 'bad');
@@ -252,6 +280,7 @@
     state.config = cfg;
     $('cfgPass').value = '';
     $('settings').close();
+    updatePrivacy();
     renderMessages();
   }
 
@@ -272,14 +301,18 @@
     if (!confirm('Hapus semua konfigurasi terenkripsi & kunci dari browser ini?')) return;
     await window.Vault.wipe();
     state.config = null;
+    state.saveHistory = false;
+    state.historyReady = false;
+    savePrefs();
+    updatePrivacy();
     $('settings').close();
     renderMessages();
   }
 
   async function tryUnlock() {
-    if (!window.Vault.exists()) return;
+    if (!window.Vault.exists() || window.Vault.hasKey()) return; // nothing stored, or already unlocked this session
     if (window.Vault.mode() === 'device') {
-      try { state.config = await window.Vault.load(); renderMessages(); } catch { /* ignore */ }
+      try { state.config = await window.Vault.load(); await loadHistory(); renderMessages(); } catch { /* ignore */ }
       return;
     }
     $('unlockPass').value = '';
@@ -293,9 +326,57 @@
       state.config = await window.Vault.load($('unlockPass').value);
       $('unlockPass').value = '';
       $('unlock').close();
+      await loadHistory();
       renderMessages();
     } catch (err) {
       msg($('unlockMsg'), err.message, 'bad');
+    }
+  }
+
+  /* ---------- encrypted local history ---------- */
+  function updatePrivacy() {
+    $('privacyNote').textContent = state.saveHistory
+      ? '🔒 Kunci API & riwayat obrolan dienkripsi (AES-256) dan hanya tersimpan di browser ini. Tidak ada yang dikirim ke server Mistis AI.'
+      : '🔒 Kunci API dienkripsi & hanya tersimpan di browser ini. Obrolan tidak disimpan ke mana pun.';
+  }
+  function serializeHistory() {
+    const ghosts = {};
+    for (const [id, list] of Object.entries(state.histories)) {
+      const clean = list.filter((m) => m.content).slice(-200).map(({ role, content, error, local, approach }) => {
+        const o = { role, content };
+        if (error) o.error = true;
+        if (local) o.local = true;
+        if (approach) o.approach = true;
+        return o;
+      });
+      if (clean.length) ghosts[id] = clean;
+    }
+    return { v: 1, savedAt: Date.now(), ghosts };
+  }
+  async function persistNow() {
+    if (!state.saveHistory || !state.historyReady || !window.Vault.hasKey()) return;
+    await window.Vault.saveBlob('history', serializeHistory());
+  }
+  function schedulePersist() {
+    clearTimeout(state.persistTimer);
+    state.persistTimer = setTimeout(() => { persistNow().catch(() => {}); }, 400);
+  }
+  async function loadHistory() {
+    if (!state.saveHistory || !window.Vault.hasKey()) return;
+    if (!window.Vault.hasBlob('history')) { state.historyReady = true; return; }
+    try {
+      const data = await window.Vault.loadBlob('history');
+      for (const [id, msgs] of Object.entries((data && data.ghosts) || {})) {
+        if (!window.GHOSTS.some((g) => g.id === id) || !Array.isArray(msgs)) continue;
+        const cur = state.histories[id] || [];
+        // keep anything produced this session (user turns or fresh approach lines)
+        const fresh = cur.filter((m) => m.role === 'user' || m.approach);
+        state.histories[id] = [...msgs, ...fresh];
+      }
+      state.historyReady = true;
+      selectGhost(state.ghostId, { silent: true });
+    } catch (e) {
+      state.historyReady = false;
     }
   }
 
@@ -324,9 +405,12 @@
       onAccept(g, rarity) {
         state.sceneId = g.favScene;
         renderScene();
-        // fresh encounter: reset this ghost's conversation with an approach greeting
-        state.histories[g.id] = [];
-        selectGhost(g.id, { greeting: approachGreeting(g, rarity), silent: true });
+        // encounter: a never-chatted ghost starts fresh; an existing conversation just gets a new approach line
+        const h = (state.histories[g.id] ||= []);
+        if (!h.some((m) => m.role === 'user')) h.length = 0;
+        h.push({ role: 'assistant', content: approachGreeting(g, rarity), local: true, approach: true });
+        selectGhost(g.id, { silent: true });
+        schedulePersist();
         revealApp();
       },
       onClose() {
@@ -339,6 +423,8 @@
   function init() {
     const prefs = loadPrefs();
     if (prefs.scene && window.SCENES.some((s) => s.id === prefs.scene)) state.sceneId = prefs.scene;
+    state.saveHistory = !!prefs.saveHistory && window.Vault.exists();
+    updatePrivacy();
     buildSceneBar();
     buildGhostList();
     renderScene();
@@ -353,12 +439,19 @@
       if (state.busy) stopStream();
       state.histories[state.ghostId] = [];
       selectGhost(state.ghostId, { silent: true });
+      schedulePersist();
     });
     $('btnSettings').addEventListener('click', () => openSettings());
     $('btnCancel').addEventListener('click', () => $('settings').close());
     $('settingsForm').addEventListener('submit', saveSettings);
     $('btnModels').addEventListener('click', fetchModels);
     $('btnForget').addEventListener('click', forgetAll);
+    $('btnWipeHistory').addEventListener('click', () => {
+      if (!window.Vault.hasBlob('history') && !state.saveHistory) return msg($('settingsMsg'), 'Tidak ada riwayat tersimpan.', 'info');
+      if (!confirm('Hapus riwayat obrolan tersimpan di browser ini? (Obrolan yang sedang tampil tidak terhapus)')) return;
+      window.Vault.removeBlob('history');
+      msg($('settingsMsg'), 'Riwayat tersimpan dihapus.', 'ok');
+    });
     $('cfgTemp').addEventListener('input', () => ($('tempVal').textContent = $('cfgTemp').value));
     document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', syncPassVisibility));
     $('unlockForm').addEventListener('submit', submitUnlock);

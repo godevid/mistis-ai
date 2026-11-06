@@ -46,7 +46,7 @@
           <textarea id="input" rows="1" placeholder="Bisikkan sesuatu…" aria-label="Pesan"></textarea>
           <button id="btnSend" type="submit" class="send">Kirim</button>
         </form>
-        <p class="privacy">🔒 Kunci API dienkripsi &amp; hanya tersimpan di browser ini. Obrolan tidak disimpan ke mana pun.</p>
+        <p class="privacy" id="privacyNote">🔒 Kunci API dienkripsi &amp; hanya tersimpan di browser ini. Obrolan tidak disimpan ke mana pun.</p>
       </section>
     </div>
   </div>
@@ -109,6 +109,12 @@
         <label class="radio"><input type="radio" name="mode" value="device"> <span><b>Kunci perangkat</b> — otomatis terbuka, kunci tak-dapat-diekspor di IndexedDB browser ini.</span></label>
         <label class="radio"><input type="radio" name="mode" value="none"> <span><b>Sesi saja</b> — tidak disimpan sama sekali, hilang saat tab ditutup.</span></label>
         <input id="cfgPass" type="password" placeholder="Passphrase (min. 6 karakter)" autocomplete="new-password">
+      </fieldset>
+
+      <fieldset>
+        <legend>Riwayat obrolan</legend>
+        <label class="radio check"><input type="checkbox" id="cfgHistory"> <span><b>Simpan riwayat obrolan secara lokal</b> — dienkripsi AES-256-GCM dengan kunci yang sama, hanya di browser ini, tidak pernah dikirim ke mana pun. Butuh mode Passphrase atau Kunci perangkat.</span></label>
+        <div class="row"><button type="button" id="btnWipeHistory" class="danger">Hapus riwayat tersimpan</button></div>
       </fieldset>
 
       <div id="settingsMsg" class="msg" role="status"></div>
