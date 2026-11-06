@@ -32,6 +32,9 @@ Static web app (HTML/CSS/vanilla JS, **tanpa build, tanpa dependency, tanpa back
 python3 -m http.server 8000   # lalu buka http://localhost:8000
 ```
 
+## Jalankan di GitHub Codespaces
+Code → Codespaces → *Create codespace*. Server statis otomatis berjalan di port 8000 dan dibuka sebagai preview (HTTPS, jadi enkripsi WebCrypto berfungsi). Jika tidak otomatis: `python3 -m http.server 8000` lalu buka tab *Ports*.
+
 ## Deploy ke GitHub Pages
 Settings → Pages → Deploy from branch → `main` / root.
 
