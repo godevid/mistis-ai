@@ -13,6 +13,9 @@
   const ITER = 310000;
   const enc = new TextEncoder();
   const dec = new TextDecoder();
+  // Decrypted-capable key held in memory only for this tab session (non-extractable CryptoKey).
+  let activeKey = null;
+  const blobKey = (name) => `mistis.${name}.v1`;
 
   const b64 = (buf) => {
     let s = '';
@@ -94,6 +97,7 @@
       const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: AAD }, key, enc.encode(JSON.stringify(data)));
       rec.ct = b64(ct);
       localStorage.setItem(LS_KEY, JSON.stringify(rec));
+      activeKey = key;
     },
     async load(passphrase) {
       const raw = localStorage.getItem(LS_KEY);
@@ -109,12 +113,45 @@
       }
       try {
         const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(rec.iv), additionalData: AAD }, key, unb64(rec.ct));
-        return JSON.parse(dec.decode(pt));
+        const data = JSON.parse(dec.decode(pt));
+        activeKey = key;
+        return data;
       } catch {
         throw new Error('Gagal membuka: passphrase salah atau data rusak.');
       }
     },
+    hasKey() {
+      return !!activeKey;
+    },
+    hasBlob(name) {
+      return !!localStorage.getItem(blobKey(name));
+    },
+    removeBlob(name) {
+      localStorage.removeItem(blobKey(name));
+    },
+    /** Encrypt any JSON-able object with the active vault key and store it locally (AES-GCM, fresh IV). */
+    async saveBlob(name, obj) {
+      if (!activeKey) throw new Error('Brankas terkunci.');
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const aad = enc.encode('mistis-ai:' + name + ':v1');
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad }, activeKey, enc.encode(JSON.stringify(obj)));
+      localStorage.setItem(blobKey(name), JSON.stringify({ v: 1, iv: b64(iv), ct: b64(ct) }));
+    },
+    async loadBlob(name) {
+      if (!activeKey) throw new Error('Brankas terkunci.');
+      const raw = localStorage.getItem(blobKey(name));
+      if (!raw) return null;
+      const rec = JSON.parse(raw);
+      try {
+        const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(rec.iv), additionalData: enc.encode('mistis-ai:' + name + ':v1') }, activeKey, unb64(rec.ct));
+        return JSON.parse(dec.decode(pt));
+      } catch {
+        throw new Error('Riwayat tidak bisa dibuka dengan kunci saat ini.');
+      }
+    },
     async wipe() {
+      activeKey = null;
+      localStorage.removeItem(blobKey('history'));
       localStorage.removeItem(LS_KEY);
       await new Promise((res) => {
         const r = indexedDB.deleteDatabase(DB_NAME);

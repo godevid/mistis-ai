@@ -6,16 +6,19 @@
 
   // weight => rarity tier (higher weight = more common)
   const POOL = [
-    { id: 'pocong', weight: 30 },
-    { id: 'tuyul', weight: 28 },
-    { id: 'kuntilanak', weight: 20 },
-    { id: 'genderuwo', weight: 14 },
-    { id: 'kuyang', weight: 8 },
+    { id: 'pocong', weight: 26 },
+    { id: 'tuyul', weight: 24 },
+    { id: 'babi', weight: 20 },
+    { id: 'kuntilanak', weight: 18 },
+    { id: 'wewe', weight: 14 },
+    { id: 'sundel', weight: 12 },
+    { id: 'genderuwo', weight: 12 },
+    { id: 'kuyang', weight: 6 },
   ];
   function rarityOf(weight) {
-    if (weight >= 28) return { key: 'common', label: 'UMUM', stars: '★' };
-    if (weight >= 20) return { key: 'rare', label: 'LANGKA', stars: '★★' };
-    if (weight >= 14) return { key: 'epic', label: 'EPIK', stars: '★★★' };
+    if (weight >= 24) return { key: 'common', label: 'UMUM', stars: '★' };
+    if (weight >= 18) return { key: 'rare', label: 'LANGKA', stars: '★★' };
+    if (weight >= 12) return { key: 'epic', label: 'EPIK', stars: '★★★' };
     return { key: 'legend', label: 'LEGENDARIS', stars: '★★★★' };
   }
   function weightedPick() {
